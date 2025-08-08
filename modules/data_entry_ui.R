@@ -24,13 +24,17 @@ data_entry_ui <- function(user_role, ns) {
                 textInput(ns("pic"), "PIC (Person In Charge)"),
                 helpText("Kode Produksi (4 digit urutan + 2 digit bulan + 2 digit tahun) akan otomatis dibuat saat 'Stop Assembly' ditekan.")
               ),
-              box( # Box baru untuk Barcode
+              box( # Box untuk Barcode telah diperbarui
                 title = "Barcode Produk yang Baru Dibuat", status = "info", solidHeader = TRUE, width = 6,
-                helpText(HTML("Barcode ini dapat discan dan menyertakan nomor produk di dalamnya.")),
+                helpText(HTML("Barcode (visual) akan muncul di bawah. Gunakan tombol untuk mengunduh format SVG atau ZPL untuk pencetakan label.")),
                 tags$svg(id = ns("barcode_svg_display"), style = "width: 100%; height: 100px;"), # SVG element for JsBarcode
                 fluidRow(
-                  column(6, actionButton(ns("download_barcode_js"), "Unduh Barcode (SVG)", style = "width:100%; margin-top: 10px;")), # Ubah jadi actionButton
-                  column(6, actionButton(ns("print_barcode"), "Cetak Langsung", class = "btn-info", style = "width:100%; margin-top: 10px;"))
+                  column(6, actionButton(ns("download_barcode_js"), "Unduh SVG", style = "width:100%; margin-top: 10px;")),
+                  column(6, downloadButton(ns("download_barcode_zpl"), "Unduh ZPL", style = "width:100%; margin-top: 10px;")) # Tombol Download ZPL Baru
+                ),
+                fluidRow(
+                  column(6, actionButton(ns("print_barcode"), "Cetak Visual", class = "btn-info", style = "width:100%; margin-top: 10px;")),
+                  column(6, actionButton(ns("print_barcode_zpl"), "Cetak ZPL", class = "btn-info", style = "width:100%; margin-top: 10px;")) # Tombol Cetak ZPL Baru
                 )
               )
             )

@@ -10,6 +10,7 @@ data_entry_server <- function(id, reactive_data, conn, assembly_start_timestamp,
     # Reactive values untuk menyimpan konten barcode/QR code sementara
     rv <- reactiveValues(
       barcode_content = NULL, # Menyimpan string untuk JsBarcode
+      barcode_zpl = NULL,     # BARU: Menyimpan string ZPL untuk barcode assembler
       qrcode_info = list() # Mengubah ini menjadi daftar untuk menyimpan info QR code dari 1 atau 2 paket
     )
     
@@ -122,14 +123,22 @@ data_entry_server <- function(id, reactive_data, conn, assembly_start_timestamp,
       # Set barcode content for display and download
       rv$barcode_content <- generated_no_produksi # Simpan string No Produksi
       
-      # Generate barcode using JsBarcode via shinyjs
-      # displayValue: true akan membuat JsBarcode menampilkan teks di dalam SVG
+      # --- BARU: Generasi ZPL untuk Barcode Assembler ---
+      # Template ZPL untuk Code 128 yang menyertakan teks yang dapat dibaca manusia
+      zpl_barcode_string <- sprintf(
+        "^XA^BY3,2,100^FO50,50^BCN,,Y,N,N,A^FD%s^FS^XZ",
+        generated_no_produksi
+      )
+      rv$barcode_zpl <- zpl_barcode_string
+      # --- AKHIR: Generasi ZPL ---
+      
+      # Generate barcode SVG using JsBarcode for on-screen display
       shinyjs::runjs(sprintf("
         var barcodeElement = document.getElementById('%s');
         if (barcodeElement) {
           JsBarcode(barcodeElement, '%s', {
             format: 'CODE128',
-            displayValue: true, # Tampilkan teks di dalam SVG
+            displayValue: true,
             height: 80,
             width: 2,
             margin: 5,
@@ -158,6 +167,7 @@ data_entry_server <- function(id, reactive_data, conn, assembly_start_timestamp,
     # Karena JsBarcode menghasilkan SVG di sisi klien, kita akan memicu unduhan dari sisi klien juga.
     observeEvent(input$download_barcode_js, {
       req(rv$barcode_content)
+      # PERBAIKAN: Komentar R (#) telah dihapus dari string JavaScript
       shinyjs::runjs(sprintf("
         var svgElement = document.getElementById('%s');
         if (svgElement) {
@@ -166,20 +176,19 @@ data_entry_server <- function(id, reactive_data, conn, assembly_start_timestamp,
           var svgUrl = URL.createObjectURL(svgBlob);
           var downloadLink = document.createElement('a');
           downloadLink.href = svgUrl;
-          # Sertakan nomor barcode dalam nama file
           downloadLink.download = 'barcode_%s.svg'; 
           document.body.appendChild(downloadLink);
           downloadLink.click();
           document.body.removeChild(downloadLink);
           URL.revokeObjectURL(svgUrl);
         }
-      ", ns("barcode_svg_display"), rv$barcode_content)) # rv$barcode_content digunakan di sini
+      ", ns("barcode_svg_display"), rv$barcode_content))
     })
     
     # Tombol cetak untuk barcode
     observeEvent(input$print_barcode, {
       req(rv$barcode_content)
-      # PENTING: Membuat jendela baru untuk mencetak hanya barcode
+      # PERBAIKAN: Komentar R (#) telah dihapus dari string JavaScript
       shinyjs::runjs(sprintf("
         var barcodeSvgElement = document.getElementById('%s');
         if (barcodeSvgElement) {
@@ -191,15 +200,52 @@ data_entry_server <- function(id, reactive_data, conn, assembly_start_timestamp,
           printWindow.document.write('</style>');
           printWindow.document.write('</head><body>');
           printWindow.document.write('<h2>Barcode Produk</h2>');
-          printWindow.document.write(barcodeSvgElement.outerHTML); # Memasukkan SVG langsung
+          printWindow.document.write(barcodeSvgElement.outerHTML);
           printWindow.document.write('</body></html>');
           printWindow.document.close();
           printWindow.focus();
           printWindow.print();
-          # printWindow.close(); # Beberapa browser mungkin tidak mengizinkan menutup jendela yang tidak dibuka oleh user
         }
       ", ns("barcode_svg_display")))
     })
+    
+    # --- BARU: Download dan Print ZPL untuk Barcode Assembler ---
+    
+    # Download handler untuk file ZPL
+    output$download_barcode_zpl <- downloadHandler(
+      filename = function() {
+        req(rv$barcode_content)
+        paste0("barcode_zpl_", rv$barcode_content, ".txt")
+      },
+      content = function(file) {
+        req(rv$barcode_zpl)
+        writeLines(rv$barcode_zpl, file)
+      }
+    )
+    
+    # observeEvent untuk tombol cetak ZPL
+    observeEvent(input$print_barcode_zpl, {
+      req(rv$barcode_zpl, rv$barcode_content)
+      showModal(modalDialog(
+        title = "Cetak Label Barcode ZPL",
+        HTML(paste0(
+          "<p>Untuk mencetak label fisik dengan printer Zebra:</p>",
+          "<ol>",
+          "<li>Klik tombol <strong>'Unduh ZPL'</strong> di bawah ini untuk mengunduh file ZPL.</li>",
+          "<li>Gunakan software seperti <strong>Zebra Setup Utilities</strong> untuk mengirim file ZPL ini ke printer Anda.</li>",
+          "</ol>",
+          "<p><strong>Isi ZPL untuk No Produksi ", rv$barcode_content, ":</strong></p>",
+          "<pre style='background-color:#f0f0f0; padding:10px; border-radius:5px; overflow-x:auto;'>",
+          htmltools::htmlEscape(rv$barcode_zpl),
+          "</pre>"
+        )),
+        easyClose = TRUE,
+        footer = tagList(
+          # Gunakan ns() di dalam modal juga untuk memastikan ID unik
+          downloadButton(ns("download_barcode_zpl"), "Unduh ZPL", class = "btn-primary")
+        )
+      ))
+    }, ignoreInit = TRUE)
     
     # --- Data Submission Logic for Tester and Packager ---
     
@@ -302,109 +348,110 @@ data_entry_server <- function(id, reactive_data, conn, assembly_start_timestamp,
         return()
       }
       
-      # Reset qrcode_info sebelum membuat yang baru
-      rv$qrcode_info <- list() 
-      message_text_final <- ""
+      # --- START: FINAL PACKAGE NUMBERING FIX ---
       
-      process_package <- function(selected_nos_subset, current_reactive_data, current_conn) {
-        current_date_package <- format(Sys.Date(), "%Y%m%d")
-        
-        existing_packages_today <- current_reactive_data$packager %>%
-          filter(grepl(paste0("^PKG-", current_date_package), no_package))
-        
-        if (nrow(existing_packages_today) == 0) {
-          package_sequence <- 1
-        } else {
-          max_seq <- existing_packages_today$no_package %>%
-            gsub(paste0("PKG-", current_date_package, "-"), "", .) %>%
-            as.numeric() %>%
-            max(na.rm = TRUE)
-          package_sequence <- max_seq + 1
-        }
-        
-        generated_no_package <- paste0("PKG-", current_date_package, "-", sprintf("%03d", package_sequence))
-        
+      # Helper function to process a single package.
+      process_package <- function(selected_nos_subset, generated_no_package, current_pic, current_pack_date, current_conn) {
         items_in_package_string <- paste(sort(selected_nos_subset), collapse = ",")
         
         new_entry <- data.frame(
           no_package = generated_no_package,
-          tanggal_packaging = input$pack_date,
-          PIC = input$pack_pic,
+          tanggal_packaging = current_pack_date,
+          PIC = current_pic,
           items_in_package = items_in_package_string,
           stringsAsFactors = FALSE
         )
         
-        print("Attempting to append new packager entry to DB.") # Debug print
-        DBI::dbAppendTable(conn, "packager", new_entry)
-        print("New packager entry appended to DB.") # Debug print
+        DBI::dbAppendTable(current_conn, "packager", new_entry)
         
         qrcode_data_for_package <- paste0(
           "Kode Paket: ", generated_no_package, "\n",
-          "Tanggal Packaging: ", format(input$pack_date, "%d/%m/%Y"), "\n",
+          "Tanggal Packaging: ", format(current_pack_date, "%d/%m/%Y"), "\n",
           "Items: ", items_in_package_string
         )
         
-        # --- GENERASI ZPL UNTUK QR CODE MENGGUNAKAN TEMPLATE BARU ---
-        # Template: ^XA^FO90,35^BQN,2,6^FDMA,(qr package)^FS^FO300,60^A0N,35,35^FDPackage: (kode package)^FS^FO300,110^A0N,28,28^FB500,5,0,L,0^FDContains: (kode 5 item)^FS^XZ
-        
-        # Pastikan data untuk QR code dienkode dengan benar untuk ZPL
-        # ZPL QR code data field (^FD) requires data to be prefixed with 'A,' for auto-encoding
-        # and special characters like backslashes need to be escaped.
-        # However, for simple text, direct insertion is usually fine.
-        
-        # Untuk Field Block (^FB), data harus diakhiri dengan '\&' untuk indikasi akhir baris
-        # jika data melebihi lebar blok atau ada baris baru yang eksplisit.
-        # Karena items_in_package_string sudah dipisahkan koma, kita bisa langsung menggunakannya.
-        # Jika Anda ingin setiap item di baris baru dalam "Contains:", Anda perlu memformat items_in_package_string
-        # dengan '\&' di antara setiap item. Untuk saat ini, kita akan asumsikan itu adalah string tunggal.
-        
-        # Mengganti placeholder dengan data aktual
         zpl_string <- sprintf(
           "^XA\n^FO40,35^BQN,2,6^FDMA,%s^FS\n^FO300,60^A0N,35,35^FDPackage: %s^FS\n^FO300,110^A0N,28,28^FB500,5,0,L,0^FDContains: %s^FS\n^XZ",
-          qrcode_data_for_package, # Data untuk QR code
-          generated_no_package,    # Kode Package
-          items_in_package_string  # Kode item
+          qrcode_data_for_package, 
+          generated_no_package,
+          items_in_package_string
         )
-        # --- AKHIR GENERASI ZPL ---
         
-        return(list(message = paste0("Paket '", generated_no_package, "' berhasil dibuat dengan barang: ", items_in_package_string),
+        return(list(message = paste0("Paket '", generated_no_package, "' berhasil dibuat."),
                     qrcode_data = qrcode_data_for_package,
                     package_no = generated_no_package,
-                    zpl_string = zpl_string)) # Tambahkan zpl_string di sini
+                    zpl_string = zpl_string))
       }
       
+      # Step 1: Determine the next sequence number based on all packages from the CURRENT MONTH.
+      current_year_month <- format(Sys.Date(), "%Y%m") # e.g., "202508"
+      
+      # Filter for all packages within this month by parsing the YYYYMM part of the 'no_package' string.
+      # In "PKG-YYYYMMDD-SSS", the YYYYMM part is at positions 5 through 10.
+      existing_packages_this_month <- reactive_data$packager %>%
+        filter(substr(no_package, 5, 10) == current_year_month)
+      
+      # Calculate the next sequence number based on this month's packages.
+      next_package_sequence <- if (nrow(existing_packages_this_month) == 0) {
+        1
+      } else {
+        # Extract the sequence part (last 3 characters) and find the maximum value.
+        max_seq <- existing_packages_this_month$no_package %>%
+          substr(15, 17) %>% # The sequence "SSS" is at positions 15, 16, 17.
+          as.numeric() %>%
+          max(na.rm = TRUE)
+        max_seq + 1
+      }
+      
+      # Get today's full date to use in the package ID format.
+      current_date_package <- format(Sys.Date(), "%Y%m%d") # e.g., "20250808"
+      
+      # Step 2: Initialize variables for UI feedback
+      rv$qrcode_info <- list() 
+      results_list <- list()
+      
+      # Step 3: Process the selected items into one or two packages
       if (num_selected_items == 5) {
-        result <- process_package(input$pack_nos, reactive_data, conn)
-        message_text_final <- result$message
-        rv$qrcode_info <- list(list(data = result$qrcode_data, package_no = result$package_no, zpl_string = result$zpl_string)) # Simpan ZPL
+        # Construct the package number with the PKG-YYYYMMDD-SSS format and the new monthly sequence.
+        generated_no_package <- paste0("PKG-", current_date_package, "-", sprintf("%03d", next_package_sequence))
+        result <- process_package(input$pack_nos, generated_no_package, input$pack_pic, input$pack_date, conn)
+        results_list <- list(result)
+        
       } else if (num_selected_items == 10) {
         sorted_pack_nos <- sort(input$pack_nos)
         package1_nos <- sorted_pack_nos[1:5]
         package2_nos <- sorted_pack_nos[6:10]
         
-        result1 <- process_package(package1_nos, reactive_data, conn)
-        result2 <- process_package(package2_nos, reactive_data, conn)
+        # Create the first package number
+        package1_no <- paste0("PKG-", current_date_package, "-", sprintf("%03d", next_package_sequence))
+        result1 <- process_package(package1_nos, package1_no, input$pack_pic, input$pack_date, conn)
         
-        message_text_final <- paste0(result1$message, "\n", result2$message)
+        # Create the second package number by incrementing the sequence
+        package2_no <- paste0("PKG-", current_date_package, "-", sprintf("%03d", next_package_sequence + 1))
+        result2 <- process_package(package2_nos, package2_no, input$pack_pic, input$pack_date, conn)
         
-        # Simpan kedua QR code info sebagai list
-        rv$qrcode_info <- list(
-          list(data = result1$qrcode_data, package_no = result1$package_no, zpl_string = result1$zpl_string),
-          list(data = result2$qrcode_data, package_no = result2$package_no, zpl_string = result2$zpl_string)
-        )
+        results_list <- list(result1, result2)
       }
       
-      reactive_data$packager <- read_and_convert_table(conn, "packager", c("tanggal_packaging"))
-      print(paste("Reactive data packager rows after update:", nrow(reactive_data$packager))) # Debug print
+      # Step 4: Aggregate results to show in the UI
+      message_text_final <- paste(sapply(results_list, `[[`, "message"), collapse = "\n")
+      rv$qrcode_info <- lapply(results_list, function(res) {
+        list(data = res$qrcode_data, package_no = res$package_no, zpl_string = res$zpl_string)
+      })
       
-      # Clear inputs after submission for both cases and update choices *before* showing the modal
-      updatePickerInput(session, "pack_nos", choices = available_for_packaging()$no_produksi, selected = character(0)) # Clear selection
+      # Step 5: Refresh the main reactive data from the database
+      reactive_data$packager <- read_and_convert_table(conn, "packager", c("tanggal_packaging"))
+      
+      # Step 6: Clear UI inputs and show the final confirmation modal
+      updatePickerInput(session, "pack_nos", choices = available_for_packaging()$no_produksi, selected = character(0))
       updateDateInput(session, "pack_date", value = Sys.Date())
       updateTextInput(session, "pack_pic", value = "")
       
       shinyjs::delay(200, {
-        showModal(modalDialog(message_text_final, easyClose = TRUE))
+        showModal(modalDialog(HTML(gsub("\n", "<br>", message_text_final)), easyClose = TRUE))
       })
+      
+      # --- END: FINAL PACKAGE NUMBERING FIX ---
     })
     
     # --- Dynamic QR Code Display and Download for Packager ---
