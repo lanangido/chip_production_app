@@ -1,0 +1,91 @@
+# reports/generate_report_template.R
+
+# Create a dummy Rmd file for the report if it doesn't exist
+# This file would typically be in the same directory as app.R
+if (!dir.exists("reports")) {
+  dir.create("reports", recursive = TRUE, showWarnings = FALSE)
+}
+
+if (!file.exists("reports/report.Rmd")) {
+  report_content <- "---
+title: 'Laporan Produksi Chip'
+author: 'Sistem Produksi'
+date: '`r format(Sys.Date(), \"%d %B %Y\")`'
+output: pdf_document
+params:
+  assembler_data: NA
+  tester_data: NA
+  packager_data: NA
+  filter_start_date: NA
+  filter_end_date: NA
+---
+
+# Ringkasan Laporan Produksi Chip
+
+Laporan ini mencakup data produksi dari tanggal **`r format(params$filter_start_date, \"%d %B %Y\")`** hingga **`r format(params$filter_end_date, \"%d %B %Y\")`**.
+
+## Data Assembler
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(kableExtra)
+
+assembler_filtered <- params$assembler_data %>%
+  filter(tanggal_start >= params$filter_start_date & tanggal_start <= params$filter_end_date)
+
+if (nrow(assembler_filtered) > 0) {
+  assembler_filtered %>%
+    mutate(
+      tanggal_start = format(tanggal_start, \"%d/%m/%Y\"),
+      tanggal_stop = format(tanggal_stop, \"%d/%m/%Y\")
+    ) %>%
+    kable(\"latex\", booktabs = TRUE, caption = \"Data Assembler\") %>%
+    kable_styling(latex_options = c(\"striped\", \"hold_position\"))
+} else {
+  cat(\"Tidak ada data Assembler dalam rentang tanggal ini.\")
+}
+```
+
+## Data Tester
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+tester_filtered <- params$tester_data %>%
+  filter(tanggal_testing >= params$filter_start_date & tanggal_testing <= params$filter_end_date)
+
+if (nrow(tester_filtered) > 0) {
+  tester_filtered %>%
+    mutate(tanggal_testing = format(tanggal_testing, \"%d/%m/%Y\")) %>%
+    kable(\"latex\", booktabs = TRUE, caption = \"Data Tester\") %>%
+    kable_styling(latex_options = c(\"striped\", \"hold_position\"))
+  
+  # Plot for Tester Status
+  ggplot(tester_filtered, aes(x = status, fill = status)) +
+    geom_bar() +
+    labs(title = \"Distribusi Status Testing\", x = \"Status\", y = \"Jumlah\") +
+    theme_minimal() +
+    theme(legend.position = \"none\")
+} else {
+  cat(\"Tidak ada data Tester dalam rentang tanggal ini.\")
+}
+```
+
+## Data Packager
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+packager_filtered <- params$packager_data %>%
+  filter(tanggal_packaging >= params$filter_start_date & tanggal_packaging <= params$filter_end_date)
+
+if (nrow(packager_filtered) > 0) {
+  packager_filtered %>%
+    mutate(tanggal_packaging = format(tanggal_packaging, \"%d/%m/%Y\")) %>%
+    kable(\"latex\", booktabs = TRUE, caption = \"Data Packager\") %>%
+    kable_styling(latex_options = c(\"striped\", \"hold_position\"))
+} else {
+  cat(\"Tidak ada data Packager dalam rentang tanggal ini.\")
+}
+```
+"
+writeLines(report_content, "reports/report.Rmd")
+}
