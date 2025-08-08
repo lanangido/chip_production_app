@@ -183,34 +183,66 @@ server <- function(input, output, session) {
              yaxis = list(showgrid = FALSE, zeroline = FALSE, showticklabels = FALSE))
   })
   
-  # --- Download Report (remains in main server) ---
+  # FIX: Robust download handler for PDF report
   output$download_report <- downloadHandler(
     filename = function() {
       paste("Laporan_Produksi_Chip_", Sys.Date(), ".pdf", sep = "")
     },
     content = function(file) {
-      # Pastikan file report.Rmd ada di direktori reports/
-      tempReport <- file.path(tempdir(), "report.Rmd")
-      # Asumsi Anda memiliki file report.Rmd di direktori reports/
-      # Jika tidak, Anda perlu membuatnya atau menyesuaikan path
-      file.copy("reports/report.Rmd", tempReport, overwrite = TRUE) 
-      
-      # Ensure reactive data is available before rendering report
-      req(reactive_data$assembler, reactive_data$tester, reactive_data$packager)
-      
-      params <- list(
-        assembler_data = reactive_data$assembler,
-        tester_data = reactive_data$tester,
-        packager_data = reactive_data$packager,
-        filter_start_date = input$filter_date[1],
-        filter_end_date = input$filter_date[2]
-      )
-      
-      rmarkdown::render(tempReport, output_file = file,
-                        params = params,
-                        envir = new.env(parent = globalenv())
-      )
+      # Show a progress indicator to the user
+      withProgress(message = 'Membuat laporan PDF...', value = 0, {
+        
+        tryCatch({
+          # Ensure the report template exists
+          report_path <- "reports/report.Rmd"
+          if (!file.exists(report_path)) {
+            stop("File template laporan 'reports/report.Rmd' tidak ditemukan.")
+          }
+          
+          # Copy the Rmd file to a temporary directory to avoid issues
+          tempReport <- file.path(tempdir(), "report.Rmd")
+          file.copy(report_path, tempReport, overwrite = TRUE)
+          
+          incProgress(0.2, detail = "Menyiapkan data...")
+          
+          # Set up parameters to pass to the Rmd document
+          params <- list(
+            assembler_data = reactive_data$assembler,
+            tester_data = reactive_data$tester,
+            packager_data = reactive_data$packager,
+            filter_start_date = input$filter_date[1],
+            filter_end_date = input$filter_date[2]
+          )
+          
+          incProgress(0.5, detail = "Merender PDF...")
+          
+          # Render the report with explicit format to prevent fallback
+          rmarkdown::render(tempReport, 
+                            output_file = file,
+                            output_format = "pdf_document",
+                            params = params,
+                            envir = new.env(parent = globalenv()))
+          
+          incProgress(1, detail = "Selesai!")
+          
+        }, error = function(e) {
+          # If an error occurs, show a modal dialog to the user with clear instructions
+          showModal(modalDialog(
+            title = "Gagal Membuat Laporan PDF",
+            HTML(paste0(
+              "<p>Gagal membuat laporan PDF. <b>File yang diunduh mungkin berupa file HTML dengan pesan error.</b></p>",
+              "<p>Kesalahan ini hampir selalu disebabkan oleh LaTeX yang tidak terinstal atau tidak dapat ditemukan oleh R.</p>",
+              "<p><b>Solusi:</b> Harap hubungi administrator sistem untuk memastikan bahwa TinyTeX telah diinstal dengan benar dengan menjalankan <code>tinytex::install_tinytex()</code> di konsol R pada server.</p>",
+              "<hr>",
+              "<strong>Pesan Error Teknis:</strong><br>",
+              "<pre style='font-size: 12px; white-space: pre-wrap; word-wrap: break-word;'>", htmltools::htmlEscape(e$message), "</pre>"
+            )),
+            easyClose = TRUE
+          ))
+          # Return NULL to prevent a corrupted download
+          return(NULL)
+        })
+      })
     }
   )
 }
-

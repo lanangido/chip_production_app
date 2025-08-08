@@ -11,11 +11,7 @@ ui <- dashboardPage(
   ),
   dashboardBody(
     useShinyjs(),
-    # Tambahkan pustaka JsBarcode di sini
-    tags$head(
-      tags$script(src = "https://cdn.jsdelivr.net/npm/jsbarcode@latest/dist/JsBarcode.all.min.js")
-    ),
+    # Pustaka JsBarcode tidak lagi diperlukan di sini karena tidak ada rendering SVG langsung
     uiOutput("main_ui")
   )
 )
-
